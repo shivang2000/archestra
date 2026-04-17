@@ -48,8 +48,15 @@ type UserConfigType = Record<
 
 export interface RemoteServerInstallResult {
   metadata: Record<string, unknown>;
-  /** Team ID to assign the MCP server to (null for personal) */
+  /** Team ID to assign the MCP server to (null for personal or org-wide) */
   teamId?: string | null;
+  /**
+   * Visibility scope for the MCP server.
+   * - 'personal' (default): only the installing user
+   * - 'team': team members (teamId required)
+   * - 'org': everyone in the organization (admin-only, set when credentialType==='org')
+   */
+  scope?: "personal" | "team" | "org";
   /** Whether metadata contains BYOS vault references in path#key format */
   isByosVault?: boolean;
 }
@@ -85,7 +92,7 @@ export function RemoteServerInstallDialog({
 
   // Team selection state
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [credentialType, setCredentialType] = useState<"personal" | "team">(
+  const [credentialType, setCredentialType] = useState<"personal" | "team" | "org">(
     "personal",
   );
   const [canInstall, setCanInstall] = useState(true);
@@ -180,7 +187,8 @@ export function RemoteServerInstallDialog({
 
       await onConfirm(catalogItem, {
         metadata,
-        teamId: selectedTeamId,
+        teamId: credentialType === "org" ? null : selectedTeamId,
+        scope: credentialType === "org" ? "org" : undefined,
         isByosVault: useVaultSecrets,
       });
       resetForm();

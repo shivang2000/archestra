@@ -699,6 +699,7 @@ export function InternalMCPCatalog({
       userConfigValues: installResult.userConfigValues,
       isByosVault: installResult.isByosVault,
       teamId: installResult.teamId ?? undefined,
+      scope: installResult.scope,
       serviceAccount: installResult.serviceAccount,
       dontShowToast: true,
     });
@@ -767,6 +768,7 @@ export function InternalMCPCatalog({
       }),
       isByosVault: result.isByosVault,
       teamId: result.teamId ?? undefined,
+      scope: result.scope,
     });
     setInstallingItemId(null);
   };
