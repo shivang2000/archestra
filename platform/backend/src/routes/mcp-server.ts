@@ -238,16 +238,43 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
           }
         }
 
+        // Validate permissions for org-wide installations.
+        // WHY: An org-wide MCP server (scope='org') exposes its credentials to
+        // every member of the organization. Only admins should be able to
+        // create one — the same bar we use for any cross-team policy decision.
+        if (serverData.scope === "org") {
+          if (serverData.teamId) {
+            // Belt-and-suspenders: the zod refinement already rejects this,
+            // but enforce here too in case the schema is bypassed (e.g. internal callers).
+            throw new ApiError(
+              400,
+              "Org-wide MCP servers cannot be assigned to a team",
+            );
+          }
+          const { success: hasMcpServerAdmin } = await hasPermission(
+            { mcpServerInstallation: ["admin"] },
+            headers,
+          );
+          if (!hasMcpServerAdmin) {
+            throw new ApiError(
+              403,
+              "You don't have permission to create org-wide MCP server installations",
+            );
+          }
+        }
+
         // Validate no duplicate installations for this catalog item
         const existingServers = await McpServerModel.findByCatalogId(
           serverData.catalogId,
         );
 
-        // Check for duplicate personal installation (same user, no team)
-        // Return existing server instead of erroring (idempotent behavior)
-        if (!serverData.teamId) {
+        // Check for duplicate personal installation (same user, no team, scope='personal')
+        // Return existing server instead of erroring (idempotent behavior).
+        // Note: when scope='org' the user is creating a separate org-wide install,
+        // so we skip the personal-dedupe path and let the org-wide check below run.
+        if (!serverData.teamId && serverData.scope !== "org") {
           const existingPersonal = existingServers.find(
-            (s) => s.ownerId === user.id && !s.teamId,
+            (s) => s.ownerId === user.id && !s.teamId && s.scope !== "org",
           );
           if (existingPersonal) {
             // If agentIds provided, assign the server's tools to those agents
@@ -275,6 +302,20 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
             throw new ApiError(
               400,
               "This team already has an installation of this MCP server",
+            );
+          }
+        }
+
+        // Check for duplicate org-wide installation: at most one org-wide
+        // server per catalog per org. We compare by catalogId here (which is
+        // already filtered above), so a hit means an org-wide install exists
+        // for this catalog item.
+        if (serverData.scope === "org") {
+          const existingOrgWide = existingServers.find((s) => s.scope === "org");
+          if (existingOrgWide) {
+            throw new ApiError(
+              400,
+              "This organization already has an org-wide installation of this MCP server",
             );
           }
         }

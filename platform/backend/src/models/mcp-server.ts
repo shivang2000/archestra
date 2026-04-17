@@ -87,6 +87,43 @@ class McpServerModel {
   }
 
   /**
+   * Get all org-wide MCP server IDs visible to a user.
+   *
+   * An org-wide server (scope='org') is visible to every member of the
+   * organization that owns the catalog the server is installed from.
+   * The user-org link is the canonical `member` table.
+   */
+  private static async getUserAccessibleOrgWideMcpServerIds(
+    userId: string,
+  ): Promise<string[]> {
+    const mcpServers = await db
+      .select({ mcpServerId: schema.mcpServersTable.id })
+      .from(schema.mcpServersTable)
+      .innerJoin(
+        schema.internalMcpCatalogTable,
+        eq(
+          schema.mcpServersTable.catalogId,
+          schema.internalMcpCatalogTable.id,
+        ),
+      )
+      .innerJoin(
+        schema.membersTable,
+        eq(
+          schema.internalMcpCatalogTable.organizationId,
+          schema.membersTable.organizationId,
+        ),
+      )
+      .where(
+        and(
+          eq(schema.mcpServersTable.scope, "org"),
+          eq(schema.membersTable.userId, userId),
+        ),
+      );
+
+    return mcpServers.map((s) => s.mcpServerId);
+  }
+
+  /**
    * Check if a user has access to a specific MCP server through team membership.
    */
   private static async userHasMcpServerAccessByTeam(
@@ -105,6 +142,43 @@ class McpServerModel {
         and(
           eq(schema.mcpServersTable.id, mcpServerId),
           eq(schema.teamMembersTable.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    return result.length > 0;
+  }
+
+  /**
+   * Check if a user has access to a specific MCP server because it is
+   * scoped org-wide and the user belongs to the same org as the catalog.
+   */
+  private static async userHasOrgWideMcpServerAccess(
+    userId: string,
+    mcpServerId: string,
+  ): Promise<boolean> {
+    const result = await db
+      .select({ id: schema.mcpServersTable.id })
+      .from(schema.mcpServersTable)
+      .innerJoin(
+        schema.internalMcpCatalogTable,
+        eq(
+          schema.mcpServersTable.catalogId,
+          schema.internalMcpCatalogTable.id,
+        ),
+      )
+      .innerJoin(
+        schema.membersTable,
+        eq(
+          schema.internalMcpCatalogTable.organizationId,
+          schema.membersTable.organizationId,
+        ),
+      )
+      .where(
+        and(
+          eq(schema.mcpServersTable.id, mcpServerId),
+          eq(schema.mcpServersTable.scope, "org"),
+          eq(schema.membersTable.userId, userId),
         ),
       )
       .limit(1);
@@ -160,17 +234,26 @@ class McpServerModel {
     // Apply access control filtering for non-MCP server admins
     if (userId && !isMcpServerAdmin) {
       // Get MCP servers accessible through:
-      // 1. Team membership (servers assigned to user's teams)
-      // 2. Personal access (user's own servers)
-      const [teamAccessibleMcpServerIds, personalMcpServerIds] =
-        await Promise.all([
-          McpServerModel.getUserAccessibleMcpServerIdsByTeam(userId),
-          McpServerUserModel.getUserPersonalMcpServerIds(userId),
-        ]);
+      // 1. Team membership (servers with scope='team' assigned to user's teams)
+      // 2. Personal access (user's own scope='personal' servers)
+      // 3. Org-wide (servers with scope='org' in the user's organization)
+      const [
+        teamAccessibleMcpServerIds,
+        personalMcpServerIds,
+        orgWideMcpServerIds,
+      ] = await Promise.all([
+        McpServerModel.getUserAccessibleMcpServerIdsByTeam(userId),
+        McpServerUserModel.getUserPersonalMcpServerIds(userId),
+        McpServerModel.getUserAccessibleOrgWideMcpServerIds(userId),
+      ]);
 
-      // Combine all lists
+      // Combine all lists; Set dedupes any IDs reachable via multiple paths
       const accessibleMcpServerIds = [
-        ...new Set([...teamAccessibleMcpServerIds, ...personalMcpServerIds]),
+        ...new Set([
+          ...teamAccessibleMcpServerIds,
+          ...personalMcpServerIds,
+          ...orgWideMcpServerIds,
+        ]),
       ];
 
       if (accessibleMcpServerIds.length === 0) {
@@ -237,12 +320,14 @@ class McpServerModel {
   ): Promise<McpServer | null> {
     // Check access control for non-MCP server admins
     if (userId && !isMcpServerAdmin) {
-      const [hasTeamAccess, hasPersonalAccess] = await Promise.all([
-        McpServerModel.userHasMcpServerAccessByTeam(userId, id),
-        McpServerUserModel.userHasPersonalMcpServerAccess(userId, id),
-      ]);
+      const [hasTeamAccess, hasPersonalAccess, hasOrgWideAccess] =
+        await Promise.all([
+          McpServerModel.userHasMcpServerAccessByTeam(userId, id),
+          McpServerUserModel.userHasPersonalMcpServerAccess(userId, id),
+          McpServerModel.userHasOrgWideMcpServerAccess(userId, id),
+        ]);
 
-      if (!hasTeamAccess && !hasPersonalAccess) {
+      if (!hasTeamAccess && !hasPersonalAccess && !hasOrgWideAccess) {
         return null;
       }
     }
