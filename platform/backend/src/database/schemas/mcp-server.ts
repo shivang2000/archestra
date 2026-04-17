@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   pgEnum,
   pgTable,
   text,
@@ -9,6 +10,7 @@ import {
 import type {
   InternalMcpCatalogServerType,
   LocalMcpServerInstallationStatus,
+  ResourceVisibilityScope,
 } from "@/types";
 import mcpCatalogTable from "./internal-mcp-catalog";
 import secretTable from "./secret";
@@ -23,39 +25,60 @@ export const oauthRefreshErrorEnum = pgEnum("oauth_refresh_error_enum", [
   "no_refresh_token",
 ]);
 
-const mcpServerTable = pgTable("mcp_server", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  catalogId: uuid("catalog_id")
-    .references(() => mcpCatalogTable.id, {
+const mcpServerTable = pgTable(
+  "mcp_server",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    catalogId: uuid("catalog_id")
+      .references(() => mcpCatalogTable.id, {
+        onDelete: "set null",
+      })
+      .notNull(),
+    serverType: text("server_type")
+      .$type<InternalMcpCatalogServerType>()
+      .notNull(),
+    secretId: uuid("secret_id").references(() => secretTable.id, {
       onDelete: "set null",
-    })
-    .notNull(),
-  serverType: text("server_type")
-    .$type<InternalMcpCatalogServerType>()
-    .notNull(),
-  secretId: uuid("secret_id").references(() => secretTable.id, {
-    onDelete: "set null",
+    }),
+    ownerId: text("owner_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    teamId: text("team_id").references(() => team.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * Visibility scope for the MCP server.
+     * - 'personal': only the owner (ownerId) can use the server
+     * - 'team':     members of teamId can use the server
+     * - 'org':      ALL users in the same org as the catalog can use the server
+     *
+     * The org boundary for 'org' scope is derived from internal_mcp_catalog.organization_id
+     * via the catalogId FK (we don't need a separate organization_id column on mcp_server).
+     */
+    scope: text("scope")
+      .$type<ResourceVisibilityScope>()
+      .notNull()
+      .default("personal"),
+    reinstallRequired: boolean("reinstall_required").notNull().default(false),
+    localInstallationStatus: text("local_installation_status")
+      .notNull()
+      .default("idle")
+      .$type<LocalMcpServerInstallationStatus>(),
+    localInstallationError: text("local_installation_error"),
+    oauthRefreshError: oauthRefreshErrorEnum("oauth_refresh_error"),
+    oauthRefreshFailedAt: timestamp("oauth_refresh_failed_at", {
+      mode: "date",
+    }),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date" })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    scopeIdx: index("idx_mcp_server_scope").on(table.scope),
   }),
-  ownerId: text("owner_id").references(() => usersTable.id, {
-    onDelete: "set null",
-  }),
-  teamId: text("team_id").references(() => team.id, {
-    onDelete: "set null",
-  }),
-  reinstallRequired: boolean("reinstall_required").notNull().default(false),
-  localInstallationStatus: text("local_installation_status")
-    .notNull()
-    .default("idle")
-    .$type<LocalMcpServerInstallationStatus>(),
-  localInstallationError: text("local_installation_error"),
-  oauthRefreshError: oauthRefreshErrorEnum("oauth_refresh_error"),
-  oauthRefreshFailedAt: timestamp("oauth_refresh_failed_at", { mode: "date" }),
-  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { mode: "date" })
-    .notNull()
-    .defaultNow()
-    .$onUpdate(() => new Date()),
-});
+);
 
 export default mcpServerTable;
